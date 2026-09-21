@@ -32,6 +32,14 @@ static class PipelineTest {
         CaptureVirtualDisplay(outDir, timestamp + "_step1_initial.png");
 
         Console.WriteLine();
+        Console.WriteLine("[準備] 電卓を仮想モニタ上に起動します");
+        LaunchCalculator();
+        Thread.Sleep(2000);
+
+        Console.WriteLine("[読み] 中間状態をキャプチャします（電卓あり、表示は0）");
+        CaptureVirtualDisplay(outDir, timestamp + "_step2_calculator.png");
+
+        Console.WriteLine();
         Console.WriteLine("[書き] ペン報告で電卓のボタンをクリックします");
         Console.WriteLine("  クリック順: 7 → × → 6 → = ");
         Console.WriteLine("  期待結果: 電卓の表示が「42」になる");
@@ -50,6 +58,11 @@ static class PipelineTest {
         Console.WriteLine("=== 検証完了 ===");
         Console.WriteLine("キャプチャ画像を確認して、電卓の表示が「42」になっているか確認してください。");
         Console.WriteLine("保存先: " + outDir);
+    }
+
+    // ── 電卓の起動 ──
+    static void LaunchCalculator() {
+        System.Diagnostics.Process.Start("explorer.exe", "shell:appsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
     }
 
     // ── 仮想モニタのフレームバッファキャプチャ ──
