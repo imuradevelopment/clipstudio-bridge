@@ -14,11 +14,12 @@
 
 | 項目 | 内容 |
 |---|---|
-| 取得元 | https://github.com/VirtualDrivers/VirtualDisplayDriver/releases |
+| 取得元 | https://github.com/VirtualDrivers/Virtual-Display-Driver/releases （リポジトリ名は Virtual-Display-Driver） |
 | 手順 | 1. リリースからインストーラ（またはzip）を取得 2. インストール実行 3. 要再起動の確認 |
 | 単体検証 | ① 設定→ディスプレイに仮想モニタが現れる ② 仮想モニタの解像度を設定できる ③ フレームバッファをプログラムからキャプチャできる |
-| バージョン | 未記録 |
-| 結果 | 未実施 |
+| バージョン | **v25.5.2**（セットアップexe: Virtual.Display.Driver-v25.05.03-setup-x64.exe、署名ドライバv24.12.24） |
+| 取得記録 | 2026-09-21取得、5,516,873バイト、SHA256: ca10b85babecfb636c85b3f04d2306968d4f940dd3dd35767f866207bfba846e |
+| 結果 | **インストーラ起動済み・UAC承認待ち**（2026-09-21。ユーザーが「はい」を押すとインストールが続く）。検証ベースライン: ディスプレイ1枚（1920×1200・メイン） |
 
 ## Phase 2: OpenTabletDriver（OTD／ペン側ドライバ）
 
@@ -27,18 +28,20 @@
 | 取得元 | https://github.com/OpenTabletDriver/OpenTabletDriver/releases |
 | 手順 | 1. Windows向けビルドを取得・展開 2. デーモンを起動 3. GUIを起動 |
 | 単体検証 | ① デーモンが常駐する ② GUIが開く ③ タブレット未接続の状態でエラーなく起動する |
-| バージョン | 未記録 |
-| 結果 | 未実施 |
+| バージョン | **v0.6.7**（OpenTabletDriver-0.6.7_win-x64.zip） |
+| 取得記録 | 2026-09-21取得、9,086,725バイト、SHA256: 4ee9ae149404f0b39132624e488507639c8ce56d1ec77755c66ee7e58562110a |
+| 結果 | 未実施（ダウンロード済み） |
 
 ## Phase 3: vmulti（仮想ペンタブ装置）
 
 | 項目 | 内容 |
 |---|---|
-| 取得元 | https://github.com/VirtualDrivers/vmulti （OpenTabletDriverエコシステムの配布物） |
+| 取得元 | https://github.com/X9VoiD/vmulti-bin （OTD開発者による公式バイナリ配布。ソースはdjpnewton/vmultiフォーク他） |
 | 手順 | 1. ドライバを取得 2. インストール 3. テスト報告の書き込み |
 | 単体検証 | ① デバイスマネージャに仮想HIDデジタイザが現れる ② テスト報告を書き込むとカーソル/ペンイベントが発生する |
-| バージョン | 未記録 |
-| 結果 | 未実施 |
+| バージョン | **v1.0**（VMulti.Driver.zip、2020-10-15リリース） |
+| 取得記録 | 2026-09-21取得、1,989,586バイト、SHA256: cc34f74a6bee7f3d1fdc3c10aae27118a359f56a51de2f5965b7d0d3e353d3a1 |
+| 結果 | 未実施（ダウンロード済み） |
 
 ## Phase 4（次フェーズ）: 組み合わせ検証
 
