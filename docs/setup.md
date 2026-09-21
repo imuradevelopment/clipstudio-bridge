@@ -17,6 +17,7 @@
 | SHA256 | ca10b85babecfb636c85b3f04d2306968d4f940dd3dd35767f866207bfba846e |
 | 手順 | 1. setup exeを実行（UAC承認） 2. インストーラウィザードを完走 3. インストール先: C:\VirtualDisplayDriver\ |
 | 単体検証 | ① 設定→ディスプレイに仮想モニタが現れる ② 仮想モニタの解像度を設定できる ③ フレームバッファをプログラムからキャプチャできる |
+| 必須設定（公式機能一覧で確認済み） | VDDControlに表示トポロジ（拡張/複製等）の設定は存在しない。トポロジはWindows OS側の表示設定のため、**インストール・有効化後に拡張モードへ切替が必要**: PowerShellで `SetDisplayConfig(0,0,0,0, SDC_APPLY|SDC_TOPOLOGY_EXTEND)`（Win+P→拡張 と同じ） |
 | 検証結果 | **合格（2026-09-21）**。①仮想モニタ出現: Display 2 (800x600, 拡張モードで物理モニタ右隣 1920,0 に配置) ③フレームバッファ読み取り成功（ComputerUseのディスプレイキャプチャで仮想デスクトップを取得可能）②解像度変更は未実施（現状800x600、vdd_settings.xmlの解像度リストから変更可能） |
 | 検証の要点 | ドライバ自体は正常動作。モニタが出なかった原因は Windowsの表示トポロジが「PC画面のみ」だったこと。**拡張モードへの切替はプログラムから可能**: PowerShellで `SetDisplayConfig(0,0,0,0, SDC_APPLY|SDC_TOPOLOGY_EXTEND)`（要: 仮想モニタ有効状態を維持）。再現手順: インストール→有効化→SetDisplayConfigで拡張 |
 
