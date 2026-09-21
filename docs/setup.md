@@ -51,8 +51,8 @@
 | SHA256 | cc34f74a6bee7f3d1fdc3c10aae27118a359f56a51de2f5965b7d0d3e353d3a1 |
 | 手順 | 1. ドライバを取得 2. インストール 3. テスト報告の書き込み |
 | 単体検証 | ① デバイスマネージャに仮想HIDデジタイザが現れる ② テスト報告を書き込むとカーソル/ペンイベントが発生する |
-| 検証結果 | **合格（2026-09-21）**。①「Pentablet HID」(ROOT\HIDCLASS\0000) が Status OK で登録 ②公式ライブラリ経由でペン報告→カーソル移動を確認 |
-| 報告形式（公式確定） | AbsoluteInputReport 10バイト: [0]=0x40(VMultiID) [1]=0x09(長さ) [2]=0x09(ReportID) [3]=Buttons [4..5]=X [6..7]=Y [8..9]=Pressure。座標0〜32767、筆圧0〜8191。書き込み先= maxIn/maxOut が 65/65 のコレクション。ライブラリ: VoiDPlugins.Library.VMulti + HidSharp（管理者権限不要で書き込み可） |
+| 検証結果 | **合格（2026-09-21）**。①「Pentablet HID」(ROOT\HIDCLASS\0000) が Status OK で登録 ②公式ライブラリ経由でペン報告→カーソル移動を確認 ③**電卓で連続ペンクリック検証合格**: C→8→×→7→= の5連続クリックが全て正確に通り、表示「56」をキャプチャで確認 |
+| 報告形式（公式確定） | AbsoluteInputReport 10バイト: [0]=0x40(VMultiID) [1]=0x09(長さ) [2]=0x09(ReportID) [3]=Buttons [4..5]=X [6..7]=Y [8..9]=Pressure。座標0〜32767、筆圧0〜8191。書き込み先= maxIn/maxOut が 65/65 のコレクション。ライブラリ: VoiDPlugins.Library.VMulti + HidSharp（管理者権限不要で書き込み可）。マッピング先は一次モニタのみ（実測、線形・誤差±1px）。テスター: tools/pentest.exe（click/probeモード） |
 
 ## Phase 4（次フェーズ）: 組み合わせ検証
 
