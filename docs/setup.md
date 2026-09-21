@@ -38,6 +38,9 @@
 | SHA256 | 4ee9ae149404f0b39132624e488507639c8ce56d1ec77755c66ee7e58562110a |
 | 手順 | 1. zipを展開 2. デーモンを起動 3. GUIを起動 |
 | 単体検証 | ① デーモンが常駐する ② GUIが開く ③ タブレット未接続の状態でエラーなく起動する |
+| 前提 | .NET 8 Desktop Runtime x64（公式必須要件）→ **8.0.31 インストール済み**（windowsdesktop-runtime-8-win-x64.exe / SHA256: c375dfd80a967405cfeff634912c1fccc56261ce3d9209ea473f60a21184d1cc） |
+| インストール先 | C:\Users\imura\OpenTabletDriver-0.6.7\OpenTabletDriver-0.6.7_win-x64\ |
+| 検証結果 | **合格（2026-09-21）**。①OpenTabletDriver.Daemon 常駐確認 ②OpenTabletDriver.UX.Wpf v0.6.7 GUI起動確認（Apply/Save/タブ操作可）③「No tablets are detected.」のみでエラーなし。起動手順: UX.Wpf.exe を作業ディレクトリ付きで起動（Start-Process -WorkingDirectory）するだけでDaemonも自動起動する |
 
 ## Phase 3: vmulti（仮想ペンタブ装置）
 
