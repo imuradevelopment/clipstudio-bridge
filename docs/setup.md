@@ -22,7 +22,9 @@
 | 結果 | **ドライバ導入完了（2026-09-21）**。デバイス登録確認済み: ROOT\DISPLAY\0000 / Status OK / Provider MikeTheTech / ドライバ日付2024-12-19。だが**仮想モニタは未出現**（ディスプレイ1枚のまま） |
 | トラブル記録 | ①elevatedインストーラはUIPIによりエージェントから操作不可 → ウィザードは人間がクリックして完走。②モニタ出現のためVDDControlでDisplay Count=1設定→Restart Driver(s)を実行したところ、**ドライバ再起動でディスプレイ系がハング**（OSは生存、画面のみ凍結。隠れたUACが一つ待機中だった）→ **ユーザーが強制再起動を選択（2026-09-21）** |
 | 再起動後の再開手順 | 1. ディスプレイ枚数を確認（起動時にドライバがロードされ仮想モニタが自動出現する可能性） 2. 出てなければ VDDControl-v25.05.03.exe を起動（.NET Runtime 6.0.36 導入済みなので起動するはず）→ Virtual Display Driverメニュー → Display Count → 1 → Restart Driver(s)（UAC承認） 3. 枚数確認 → 2枚になれば Phase 1 検証合格 |
-| 再起動後の経過 | 有効化維持確認済み（Status OK）。だがモニタ未出現。VDDControlを起動しコマンド調査: ①ヘルプコマンド一覧取得成功（SETCOUNT/RELOAD_DRIVER/RESTART_DRIVER等）②LOGGING true / DEBUGLOGGING true 有効化済み ③RELOAD_DRIVER → ドライバ応答なし ④SETCOUNT 1 → XML更新成功だが「**[RESPONSE] No response received from driver.**」＝**ドライバがゾンビ状態（コマンドに無応答）**。結論: **完全シャットダウン→コールドブートを実施する（2026-09-21）**。コールドブート後も「No response/モニタ未出現」ならドライバ互換性問題として計画B（MolotovCherry/virtual-display-rs 等）へ |
+| 再起動後の経過 | 有効化維持確認済み（Status OK）。だがモニタ未出現。VDDControlを起動しコマンド調査: ①ヘルプコマンド一覧取得成功（SETCOUNT/RELOAD_DRIVER/RESTART_DRIVER等）②LOGGING true / DEBUGLOGGING true 有効化済み ③RELOAD_DRIVER → ドライバ応答なし ④SETCOUNT 1 → XML更新成功だが「**[RESPONSE] No response received from driver.**」＝**ドライバがコマンドに無応答**。コールドブートでドライバの初期状態を確認することとした |
+| 原因の仮説（未検証・事実とは区別する） | **H1**: 凍結（ドライバ再起動の強制中断）がドライバを壊した → 現状これを支持する証拠はゼロ。**H2**: このマシンのWindowsビルドとドライバの相性が悪く、導入時から一度もまともに動いていない → 「初回導入直後のStatus OK時点で既にモニタが一度も出現していない」という観測と整合する。**現時点でH2のほうが筋が良い。両仮説とも未検証** |
+| 次の一手 | **完全シャットダウン→コールドブート**（2026-09-21実施予定）。コールドブートは「初期状態からの動作確認」であり、H1/H2の判別実験でもある。コールドブート後も「無応答/モニタ未出現」ならH2（互換性問題）濃厚 → 計画B（別ドライバ: MolotovCherry/virtual-display-rs 等）へ移行 |
 
 ## Phase 2: OpenTabletDriver（OTD／ペン側ドライバ）
 
