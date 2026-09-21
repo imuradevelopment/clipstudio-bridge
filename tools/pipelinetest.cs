@@ -72,11 +72,6 @@ static class PipelineTest {
         System.Diagnostics.Process.Start("explorer.exe", "shell:appsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
     }
 
-    // ── 電卓の起動 ──
-    static void LaunchCalculator() {
-        System.Diagnostics.Process.Start("explorer.exe", "shell:appsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
-    }
-
     // ── 電卓の終了 ──
     static void CloseCalculator() {
         var proc = System.Diagnostics.Process.GetProcessesByName("CalculatorApp");
