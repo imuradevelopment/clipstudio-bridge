@@ -55,14 +55,33 @@ static class PipelineTest {
         CaptureVirtualDisplay(outDir, timestamp + "_step3_result.png");
 
         Console.WriteLine();
+        Console.WriteLine("[終了] 電卓を閉じます");
+        CloseCalculator();
+
+        Console.WriteLine("[読み] 終了後の状態をキャプチャします");
+        CaptureVirtualDisplay(outDir, timestamp + "_step4_closed.png");
+
+        Console.WriteLine();
         Console.WriteLine("=== 検証完了 ===");
-        Console.WriteLine("キャプチャ画像を確認して、電卓の表示が「42」になっているか確認してください。");
+        Console.WriteLine("キャプチャ画像を確認して、各段階の状態を検証してください。");
         Console.WriteLine("保存先: " + outDir);
     }
 
     // ── 電卓の起動 ──
     static void LaunchCalculator() {
         System.Diagnostics.Process.Start("explorer.exe", "shell:appsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
+    }
+
+    // ── 電卓の起動 ──
+    static void LaunchCalculator() {
+        System.Diagnostics.Process.Start("explorer.exe", "shell:appsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
+    }
+
+    // ── 電卓の終了 ──
+    static void CloseCalculator() {
+        var proc = System.Diagnostics.Process.GetProcessesByName("CalculatorApp");
+        foreach (var p in proc) p.Kill();
+        Thread.Sleep(1000);
     }
 
     // ── 仮想モニタのフレームバッファキャプチャ ──
