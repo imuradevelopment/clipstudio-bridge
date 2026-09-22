@@ -57,13 +57,13 @@ static class PipelineTest {
         // ── ④ ペン報告 7 × 6 = ──
         Console.WriteLine("\n[4] VMulti HID報告でペンクリック 7 × 6 = を送信");
         using (_vmulti = OpenVmulti()) {
-            PenTap(89, 378);   // 7
+            PenTap(_vmulti, 89, 378);   // 7
             Thread.Sleep(200);
-            PenTap(282, 372);  // ×
+            PenTap(_vmulti, 282, 372);  // ×
             Thread.Sleep(200);
-            PenTap(205, 423);  // 6
+            PenTap(_vmulti, 205, 423);  // 6
             Thread.Sleep(200);
-            PenTap(282, 525);  // =
+            PenTap(_vmulti, 282, 525);  // =
             Thread.Sleep(500);
         }
         Console.WriteLine("  ペンクリック送信完了");
