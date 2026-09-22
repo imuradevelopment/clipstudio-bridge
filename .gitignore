@@ -1,5 +1,7 @@
-# ビルド成果物
+# ビルド成果物・テスト画像
 *.exe
 *.dll
+*.png
+captures/
 bin/
 obj/
