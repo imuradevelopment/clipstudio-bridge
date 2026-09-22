@@ -1,20 +1,22 @@
-// pipelinetest.cs — 第一回検証: 仮想液タブの「読み→書き→読み」を電卓で通す。
+// pipelinetest.cs — 仮想液タブの通し検証（起動から終了まで、指定タイミングのキャプチャ保証）
 //
-// モード:
-//   run                       … 全工程を1実行で通す（本命・InjectSyntheticPointerInput版）
-//                                ①仮想モニタ領域取得 ②初期キャプチャ ③電卓起動→仮想モニタへ移動
-//                                ④中間キャプチャ ⑤ペン注入 7×6= ⑥結果キャプチャ ⑦電卓終了 ⑧終了後キャプチャ
-//   move                      … ③④のみ（VMulti版tap用の準備）
-//   tap x1 y1 [x2 y2 ...]     … VMulti HID報告でタップ→結果キャプチャ（比較試験用）
-//                                ※実行前にクリックなし移動報告で着地が仮想モニタ内か確認、外なら中止
-//   close                     … 電卓終了+終了後キャプチャ
+// キャプチャのタイミング(指定どおり。全て全画面=メイン+仮想モニタの両方が写る):
+//   仮想液タブ起動 → キャプチャ
+//   電卓起動と配置 → キャプチャ
+//   操作の前後     → キャプチャ(各タップごと)
+//   最終的な表示   → キャプチャ
+//   電卓閉じる     → キャプチャ
+//   仮想液タブ終了 → キャプチャ
+//  に加えて、起動完了〜終了の間は 0.5秒間隔の常時キャプチャ(roll/)を
+// バックグラウンドで取り続ける。前後2枚が同じでも間に起きた出来事を
+// 見逃さないため。名前付きキャプチャの時点でロール何枚目かをログに残す。
 //
-// 書き込み方式の位置づけ:
-//   run  = InjectSyntheticPointerInput（OS公式API・デスクトップ絶対座標直指定。
-//          デジタイザ↔ディスプレイの自動ペアリング規則に依存せず仮想モニタを直接指定できる。
-//          過去に仮想モニタ上の電卓表示を変化させた観測実績あり）
-//   tap  = VMulti HID報告（実装置エミュ。現状ペアリングがメインモニタ固定のためブロッカー検証用）
+// 経路: vmulti(col05制御) → vmulti.sys → OTD(読み取り) → SendInput絶対座標 → 仮想モニタ
+//  既知の問題(2026-09-23 run-032014で観測): OTDの注入は仮想マウス(MOUSEEVENTF)なので、
+//  カーソルがメイン上に居る時にクリック系イベントが発火するとメインに右クリックメニュー等が出る。
+//  → OTDを使わない版への載せ替えは今後の課題(OSペンスタック経路)。
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -23,93 +25,274 @@ using System.Threading;
 using HidSharp;
 
 static class PipelineTest {
-    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
-    [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr v);
     static readonly IntPtr PER_MONITOR_AWARE_V2 = new IntPtr(-4);
-
-    // Per-Monitor DPI Aware にして全座標を物理ピクセルに統一する。
-    // この環境はDPI 150%で、System-Awareだと仮想モニタが(2880,0)1200x900に見えて
-    // 物理(1920,0)800x600と食い違い、キャプチャ・注入ともに実在しない領域を叩く。
-    static void MakePerMonitorDpiAware() {
-        try { if (SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)) return; } catch { }
-        SetProcessDPIAware();
-    }
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int h2, uint f);
     [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
-    [DllImport("user32.dll")] static extern IntPtr CreateSyntheticPointerDevice(uint type, uint maxCount, uint mode);
-    [DllImport("user32.dll")] static extern bool InjectSyntheticPointerInput(IntPtr dev, ref POINTER_TYPE_INFO info, uint count);
-    [DllImport("user32.dll")] static extern void DestroySyntheticPointerDevice(IntPtr dev);
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
 
-    const uint PT_PEN = 3;
-    const uint POINTER_FLAG_DOWN = 0x00010000;
-    const uint POINTER_FLAG_UPDATE = 0x00020000;
-    const uint POINTER_FLAG_UP = 0x00040000;
-    const uint POINTER_FLAG_INRANGE = 0x00000002;
-    const uint POINTER_FLAG_INCONTACT = 0x00000004;
-    const uint POINTER_FLAG_PRIMARY = 0x00000200;
-    const uint PEN_MASK_PRESSURE = 0x00000001;
+    const byte TIP = 0x01, INRANGE = 0x02;
 
-    [StructLayout(LayoutKind.Sequential)]
-    struct POINT { public int X, Y; }
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct POINTER_INFO {
-        public uint pointerType;
-        public uint pointerId;
-        public uint frameId;
-        public uint pointerFlags;
-        public IntPtr sourceDevice;
-        public IntPtr hwndTarget;
-        public POINT ptPixelLocation;
-        public POINT ptHimetricLocation;
-        public uint dwTime;
-        public uint historyCount;
-        public int inputData;
-        public uint dwKeyStates;
-        public ulong performanceCount;
-        public POINT ptPixelLocationRaw;
-        public POINT ptHimetricLocationRaw;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct POINTER_PEN_INFO {
-        public POINTER_INFO pointerInfo;
-        public uint penFlags;
-        public uint penMask;
-        public uint pressure;
-        public uint rotation;
-        public int tiltX;
-        public int tiltY;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct POINTER_TYPE_INFO {
-        public uint type;
-        public POINTER_PEN_INFO penInfo;
-    }
-
-    static Rectangle _vd; // 仮想モニタ領域（デスクトップ絶対座標・動的取得）
-    static uint frameId = 0;
+    static Rectangle _vd, _all;
+    static string _capDir;
+    static byte _targetReportId;
+    static HidStream _vmulti;
+    static volatile bool _rolling;
+    static int _rollCount;
+    static Thread _rollThread;
+    static readonly object _shotLock = new object();
 
     static int Main(string[] args) {
-        MakePerMonitorDpiAware();
-        string outDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "captures");
-        Directory.CreateDirectory(outDir);
-        string ts = DateTime.Now.ToString("HHmmss");
-
+        try { SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2); } catch { }
         _vd = FindVirtualBounds();
         if (_vd.IsEmpty) { Console.WriteLine("ERR: 仮想モニタが見つからない"); return 1; }
-        Console.WriteLine("仮想モニタ: (" + _vd.X + "," + _vd.Y + ") " + _vd.Width + "x" + _vd.Height);
+        _all = UnionAllScreens();
+        _capDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "captures",
+            "run-" + DateTime.Now.ToString("HHmmss"));
+        Directory.CreateDirectory(_capDir);
+        Console.WriteLine("仮想モニタ: (" + _vd.X + "," + _vd.Y + ") " + _vd.Width + "x" + _vd.Height
+            + "  全画面: (" + _all.X + "," + _all.Y + ") " + _all.Width + "x" + _all.Height);
+        Console.WriteLine("証拠キャプチャ: " + _capDir);
 
-        string mode = args.Length > 0 ? args[0] : "";
-        switch (mode) {
-            case "run":   return DoRun(outDir, ts);
-            case "move":  return DoMove(outDir, ts);
-            case "tap":   return DoTap(outDir, ts, args);
-            case "close": return DoClose(outDir, ts);
-            default:
-                Console.WriteLine("usage: pipelinetest run | move | tap x1 y1 [...] | close");
-                return 1;
+        int exit = 1;
+        try {
+            // ── [1] 仮想液タブ起動 ──
+            Console.WriteLine("\n=== [1] 仮想液タブ起動 ===");
+            string daemonLog = StartOtdDaemon();
+            _targetReportId = ResolveTargetReportId(daemonLog);
+            Console.WriteLine("書き込み対象ReportID: 0x" + _targetReportId.ToString("X2")
+                + (_targetReportId == 0x05 ? " (col03)" : " (col04)"));
+            if (!VerifyOtdDisplayArea()) return 1;
+            _vmulti = OpenVmultiControl();
+            if (Probe() != 0) return 1;
+            Capture("01_仮想液タブ起動後");          // 指定: 起動 → キャプチャ
+            StartRolling();                           // ここから切断まで常時キャプチャ
+
+            // ── [2] 電卓起動と配置 ──
+            Console.WriteLine("\n=== [2] 電卓起動・配置 ===");
+            Process.Start("explorer.exe", "shell:appsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
+            Thread.Sleep(3000);
+            if (!MoveCalcTo(_vd.X + 10, _vd.Y + 10)) return 1;
+            Thread.Sleep(1500);
+            Capture("02_電卓配置後");                  // 指定: 配置 → キャプチャ
+
+            // ── [3] 操作の前後でキャプチャ ──
+            Console.WriteLine("\n=== [3] ペン操作 7 × 6 = ===");
+            int[][] taps = new int[][] {
+                new int[] { 3317, 19332 },  // 7   (UI実測: 中心(2001,354)物理→タブレット換算)
+                new int[] { 18068, 19332 }, // ×   (乗算ボタン中心(2361,354)物理)
+                new int[] { 13147, 22234 }, // 6   (ボタン中心(2241,407)物理)
+                new int[] { 18068, 28015 }, // =   (等号ボタン中心(2361,513)物理)
+            };
+            string[] names = new string[] { "7", "×", "6", "=" };
+            for (int i = 0; i < taps.Length; i++) {
+                Capture("03-" + (i + 1) + "a_操作前_" + names[i]);
+                Tap((ushort)taps[i][0], (ushort)taps[i][1], 4096);
+                Thread.Sleep(300);
+                Capture("03-" + (i + 1) + "b_操作後_" + names[i]);
+            }
+
+            // ── [4] 最終的な表示 ──
+            Thread.Sleep(500);
+            Capture("04_最終表示");                     // 指定: 最終表示 → キャプチャ
+
+            exit = 0;
+        } finally {
+            // ── [5] 電卓閉じる → キャプチャ ──
+            Console.WriteLine("\n=== [5] 電卓終了 ===");
+            foreach (var p in Process.GetProcessesByName("CalculatorApp"))
+                try { p.Kill(); } catch { }
+            Thread.Sleep(1000);
+            Capture("05_電卓終了後");
+
+            // ── [6] 仮想液タブ終了 → キャプチャ ──
+            Console.WriteLine("\n=== [6] 仮想液タブ終了 ===");
+            Cleanup();
+            StopRolling();                             // 常時キャプチャは切断まで
+            Capture("06_仮想液タブ終了後");
+            Console.WriteLine("\n=== 完了 exit=" + exit + " キャプチャ: " + _capDir
+                + " (常時キャプチャ " + _rollCount + "枚)");
+        }
+        return exit;
+    }
+
+    // ══════════ 常時キャプチャ(接続完了〜切断) ══════════
+
+    static void StartRolling() {
+        Directory.CreateDirectory(Path.Combine(_capDir, "roll"));
+        _rolling = true; _rollCount = 0;
+        _rollThread = new Thread(() => {
+            while (_rolling) {
+                try {
+                    string path = Path.Combine(_capDir, "roll", _rollCount.ToString("0000") + ".jpg");
+                    lock (_shotLock)
+                    using (var bmp = new Bitmap(_all.Width, _all.Height)) {
+                        using (var g = Graphics.FromImage(bmp))
+                            g.CopyFromScreen(_all.X, _all.Y, 0, 0, new Size(_all.Width, _all.Height));
+                        var jp = new EncoderParameters(1);
+                        jp.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 75L);
+                        bmp.Save(path, GetJpegEncoder(), jp);
+                    }
+                    _rollCount++;
+                } catch { _rollCount++; }
+                Thread.Sleep(500);
+            }
+        });
+        _rollThread.IsBackground = true;
+        _rollThread.Start();
+        Console.WriteLine("常時キャプチャ開始(0.5秒間隔 → roll/)");
+    }
+    static void StopRolling() {
+        _rolling = false;
+        if (_rollThread != null) _rollThread.Join(5000);
+    }
+    static ImageCodecInfo GetJpegEncoder() {
+        foreach (var c in ImageCodecInfo.GetImageEncoders())
+            if (c.FormatID == ImageFormat.Jpeg.Guid) return c;
+        return null;
+    }
+
+    // ══════════ 仮想液タブ起動・終了 ══════════
+
+    static string StartOtdDaemon() {
+        foreach (var name in new string[] { "OpenTabletDriver.Daemon", "OpenTabletDriver.UX.Wpf" })
+            foreach (var p in Process.GetProcessesByName(name))
+                try { p.Kill(); } catch { }
+        Thread.Sleep(1500);
+        string logPath = Path.Combine(_capDir, "otd-daemon.log");
+        var psi = new ProcessStartInfo(@"C:\Users\imura\OpenTabletDriver-0.6.7\OpenTabletDriver-0.6.7_win-x64\OpenTabletDriver.Daemon.exe") {
+            UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
+        };
+        bool enabled = false;
+        var proc = new Process { StartInfo = psi };
+        proc.OutputDataReceived += (s, e) => {
+            if (e.Data == null) return;
+            try { File.AppendAllText(logPath, e.Data + "\n"); } catch { }
+            if (e.Data.Contains("Driver is enabled")) enabled = true;
+        };
+        proc.ErrorDataReceived += (s, e) => { if (e.Data != null) try { File.AppendAllText(logPath, "[err] " + e.Data + "\n"); } catch { } };
+        if (!proc.Start()) throw new Exception("OTDデーモン起動失敗");
+        proc.BeginOutputReadLine();
+        proc.BeginErrorReadLine();
+        Console.WriteLine("OTDデーモン起動 PID=" + proc.Id + "。初期化完了まで待機...");
+        var sw = Stopwatch.StartNew();
+        while (!enabled && sw.ElapsedMilliseconds < 30000) Thread.Sleep(300);
+        if (!enabled) throw new Exception("OTDデーモンが時間内に初期化されない（ログ: " + logPath + "）");
+        Console.WriteLine("初期化完了 (" + sw.ElapsedMilliseconds + "ms)");
+        return logPath;
+    }
+
+    static byte ResolveTargetReportId(string daemonLog) {
+        string log = File.ReadAllText(daemonLog);
+        foreach (var m in System.Text.RegularExpressions.Regex.Matches(log, @"col0(\d)")) {
+            string col = m.ToString();
+            if (col == "col03") return 0x05;
+            if (col == "col04") return 0x06;
+        }
+        throw new Exception("デーモンログから対象コレクション(col03/col04)を特定できない:\n" + log);
+    }
+
+    static bool VerifyOtdDisplayArea() {
+        string json = File.ReadAllText(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "OpenTabletDriver", "settings.json"));
+        string abs = ExtractObject(json, "AbsoluteModeSettings");
+        string disp = ExtractObject(abs, "Display");
+        double w = GetNum(disp, "Width"), h = GetNum(disp, "Height");
+        double x = GetNum(disp, "X"), y = GetNum(disp, "Y");
+        Console.WriteLine("OTD Display area: " + w + "x" + h + "@<" + x + "," + y + ">");
+        double l = x - w / 2, t = y - h / 2, r = x + w / 2, b = y + h / 2;
+        if (!(l >= _vd.X && t >= _vd.Y && r <= _vd.X + _vd.Width && b <= _vd.Y + _vd.Height)) {
+            Console.WriteLine("ERR: Display area が仮想モニタ外にはみ出す (" + l + "," + t + ")-(" + r + "," + b + ")");
+            return false;
+        }
+        return true;
+    }
+
+    static int Probe() {
+        WritePen(16383, 16383, 0, INRANGE);
+        Thread.Sleep(400);
+        WritePen(16383, 16383, 0, 0);
+        Thread.Sleep(300);
+        POINT cp; GetCursorPos(out cp);
+        bool ok = _vd.Contains(cp.X, cp.Y);
+        Console.WriteLine("probe着地: (" + cp.X + "," + cp.Y + ") → " + (ok ? "仮想モニタ内 OK" : "仮想モニタ外 FAIL"));
+        return ok ? 0 : 1;
+    }
+
+    static void Cleanup() {
+        try { if (_vmulti != null) { WritePen(16383, 16383, 0, INRANGE); WritePen(16383, 16383, 0, 0); } } catch { }
+        foreach (var p in Process.GetProcessesByName("OpenTabletDriver.Daemon"))
+            try { p.Kill(); } catch { }
+        Console.WriteLine("仮想液タブ停止（ペンlift + OTDデーモン停止）");
+    }
+
+    // ══════════ 電卓 ══════════
+
+    static bool MoveCalcTo(int x, int y) {
+        foreach (var p in Process.GetProcessesByName("ApplicationFrameHost")) {
+            if (p.MainWindowTitle == "電卓") {
+                SetWindowPos(p.MainWindowHandle, IntPtr.Zero, x, y, 0, 0, 0x1 | 0x4 | 0x10);
+                Console.WriteLine("電卓を (" + x + "," + y + ") へ移動");
+                return true;
+            }
+        }
+        Console.WriteLine("ERR: 電卓ウィンドウが見つからない");
+        return false;
+    }
+
+    // ══════════ ペン書き込み ══════════
+
+    static HidStream OpenVmultiControl() {
+        foreach (var dev in DeviceList.Local.GetHidDevices(255, 47820)) {
+            if (dev.GetMaxInputReportLength() == 65 && dev.GetMaxOutputReportLength() == 65) {
+                HidStream s;
+                if (dev.TryOpen(out s)) return s;
+            }
+        }
+        throw new Exception("VMulti control collection (65/65) not found");
+    }
+
+    static void Tap(ushort x, ushort y, ushort pressure) {
+        Console.WriteLine("tap (" + x + "," + y + ") 筆圧=" + pressure);
+        WritePen(x, y, 0, INRANGE);
+        Thread.Sleep(60);
+        WritePen(x, y, pressure, (byte)(INRANGE | TIP));
+        Thread.Sleep(60);
+        WritePen(x, y, 0, INRANGE);
+        Thread.Sleep(60);
+        WritePen(x, y, 0, 0);
+        Thread.Sleep(100);
+    }
+
+    static void WritePen(ushort x, ushort y, ushort pressure, byte buttons) {
+        byte[] b = new byte[12];
+        b[0] = 0x40;      // VMultiID
+        b[1] = 0x0B;      // ReportLength
+        b[2] = _targetReportId;
+        b[3] = buttons;
+        b[4] = (byte)(x & 0xFF); b[5] = (byte)(x >> 8);
+        b[6] = (byte)(y & 0xFF); b[7] = (byte)(y >> 8);
+        b[8] = (byte)(pressure & 0xFF); b[9] = (byte)(pressure >> 8);
+        b[10] = 0; b[11] = 0;
+        _vmulti.Write(b);
+    }
+
+    // ══════════ キャプチャ ══════════
+
+    static void Capture(string name) {
+        try {
+            string path = Path.Combine(_capDir, name + ".png");
+            lock (_shotLock)
+            using (var bmp = new Bitmap(_all.Width, _all.Height)) {
+                using (var g = Graphics.FromImage(bmp))
+                    g.CopyFromScreen(_all.X, _all.Y, 0, 0, new Size(_all.Width, _all.Height));
+                bmp.Save(path, ImageFormat.Png);
+            }
+            Console.WriteLine("  capture: " + name + ".png"
+                + (_rolling ? "  (時点: roll/" + _rollCount.ToString("0000") + ".jpg)" : ""));
+        } catch (Exception ex) {
+            Console.WriteLine("  capture失敗(" + name + "): " + ex.Message);
         }
     }
 
@@ -119,187 +302,33 @@ static class PipelineTest {
         return Rectangle.Empty;
     }
 
-    // ── 全工程通し（InjectSyntheticPointerInput版・本命） ──
-    static int DoRun(string outDir, string ts) {
-        Console.WriteLine("\n[1] 初期キャプチャ（電卓なし・仮想モニタ領域）");
-        Capture(_vd, Path.Combine(outDir, ts + "_1_initial.png"));
+    static Rectangle UnionAllScreens() {
+        var r = Rectangle.Empty;
+        foreach (var sc in System.Windows.Forms.Screen.AllScreens)
+            r = r.IsEmpty ? sc.Bounds : Rectangle.Union(r, sc.Bounds);
+        return r;
+    }
 
-        Console.WriteLine("\n[2] 電卓を起動し仮想モニタへ移動");
-        System.Diagnostics.Process.Start("explorer.exe",
-            "shell:appsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
-        Thread.Sleep(3000);
-        if (!MoveCalcTo(_vd.X + 10, _vd.Y + 10)) return 1;
-        Thread.Sleep(1500);
+    // ══════════ settings.json 最小読み取り ══════════
 
-        Console.WriteLine("\n[3] 中間キャプチャ（電卓あり・表示0のはず）");
-        Capture(_vd, Path.Combine(outDir, ts + "_2_calculator.png"));
-
-        Console.WriteLine("\n[4] ペン注入 7 × 6 =（InjectSyntheticPointerInput・仮想モニタ絶対座標）");
-        IntPtr pen = CreateSyntheticPointerDevice(PT_PEN, 1, 1);
-        if (pen == IntPtr.Zero) {
-            Console.WriteLine("ERR: CreateSyntheticPointerDevice failed err=" + Marshal.GetLastWin32Error());
-            return 1;
+    static string ExtractObject(string json, string key) {
+        int i = json.IndexOf("\"" + key + "\"");
+        if (i < 0) throw new Exception("key not found: " + key);
+        int c = json.IndexOf('{', i);
+        int depth = 0, j = c;
+        for (; j < json.Length; j++) {
+            if (json[j] == '{') depth++;
+            else if (json[j] == '}') { depth--; if (depth == 0) break; }
         }
-        try {
-            // 電卓のボタン位置（仮想モニタローカルpx。電卓は (10,10) に配置した前提の旧実測値）
-            SynTap(pen, _vd.X + 55,  _vd.Y + 372, 4096);  // 7
-            Thread.Sleep(300);
-            SynTap(pen, _vd.X + 295, _vd.Y + 372, 4096);  // ×
-            Thread.Sleep(300);
-            SynTap(pen, _vd.X + 205, _vd.Y + 425, 4096);  // 6
-            Thread.Sleep(300);
-            SynTap(pen, _vd.X + 295, _vd.Y + 527, 4096);  // =
-            Thread.Sleep(500);
-        } finally {
-            DestroySyntheticPointerDevice(pen);
-        }
-        Console.WriteLine("  ペン注入完了");
-
-        Console.WriteLine("\n[5] 結果キャプチャ（表示42になれば第一回検証成立）");
-        Capture(_vd, Path.Combine(outDir, ts + "_3_result.png"));
-
-        DoClose(outDir, ts);
-        Console.WriteLine("\n=== run 完了。キャプチャ4枚を確認: " + outDir);
-        return 0;
+        return json.Substring(c, j - c + 1);
     }
-
-    // ── 電卓を仮想モニタへ（UWPはApplicationFrameHostがホスト。実績ある方式） ──
-    static bool MoveCalcTo(int x, int y) {
-        var procs = System.Diagnostics.Process.GetProcessesByName("ApplicationFrameHost");
-        foreach (var p in procs) {
-            if (p.MainWindowTitle == "電卓") {
-                SetWindowPos(p.MainWindowHandle, IntPtr.Zero, x, y, 0, 0, 0x1 | 0x4 | 0x10);
-                Console.WriteLine("  電卓を (" + x + "," + y + ") へ移動");
-                return true;
-            }
-        }
-        Console.WriteLine("  ERR: 電卓ウィンドウが見つからない");
-        return false;
-    }
-
-    // ── VMulti版の準備（move）とtap ──
-    static int DoMove(string outDir, string ts) {
-        Console.WriteLine("\n[1] 初期キャプチャ");
-        Capture(_vd, Path.Combine(outDir, ts + "_1_initial.png"));
-        Console.WriteLine("\n[2] 電卓を起動し仮想モニタへ移動");
-        System.Diagnostics.Process.Start("explorer.exe",
-            "shell:appsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
-        Thread.Sleep(3000);
-        if (!MoveCalcTo(_vd.X + 10, _vd.Y + 10)) return 1;
-        Thread.Sleep(1500);
-        Console.WriteLine("\n[3] 中間キャプチャ");
-        Capture(_vd, Path.Combine(outDir, ts + "_2_calculator.png"));
-        return 0;
-    }
-
-    static int DoTap(string outDir, string ts, string[] args) {
-        if (args.Length < 3 || (args.Length - 1) % 2 != 0) {
-            Console.WriteLine("usage: pipelinetest tap x1 y1 [x2 y2 ...]");
-            return 1;
-        }
-        using (var s = OpenVmulti()) {
-            Console.WriteLine("\n[4] 着地確認（クリックなし移動報告）");
-            VSend(s, 16383, 16383, 4096, 0x00);
-            Thread.Sleep(300);
-            VSend(s, 16383, 16383, 0, 0x00);
-            Thread.Sleep(200);
-            POINT cp; GetCursorPos(out cp);
-            bool inside = _vd.Contains(cp.X, cp.Y);
-            Console.WriteLine("  着地: (" + cp.X + "," + cp.Y + ") → " + (inside ? "仮想モニタ内 OK" : "仮想モニタ外"));
-            if (!inside) {
-                Console.WriteLine("  中止: ペンの紐付け先が仮想モニタではない");
-                return 1;
-            }
-            Console.WriteLine("\n[5] VMulti HID報告でペンタップ");
-            for (int i = 1; i + 1 < args.Length; i += 2) {
-                int vx = int.Parse(args[i]), vy = int.Parse(args[i + 1]);
-                VTap(s, vx, vy);
-                Console.WriteLine("  tap (" + vx + "," + vy + ")");
-                Thread.Sleep(200);
-            }
-        }
-        Console.WriteLine("\n[6] 結果キャプチャ");
-        Capture(_vd, Path.Combine(outDir, ts + "_3_result.png"));
-        return 0;
-    }
-
-    static int DoClose(string outDir, string ts) {
-        Console.WriteLine("\n[7] 電卓を終了");
-        foreach (var p in System.Diagnostics.Process.GetProcessesByName("CalculatorApp")) p.Kill();
-        Thread.Sleep(1000);
-        Console.WriteLine("\n[8] 終了後キャプチャ");
-        Capture(_vd, Path.Combine(outDir, ts + "_4_closed.png"));
-        return 0;
-    }
-
-    // ── 仮想モニタ領域のキャプチャ ──
-    static void Capture(Rectangle r, string filepath) {
-        using (var bmp = new Bitmap(r.Width, r.Height)) {
-            using (var g = Graphics.FromImage(bmp))
-                g.CopyFromScreen(r.X, r.Y, 0, 0, new Size(r.Width, r.Height));
-            bmp.Save(filepath, ImageFormat.Png);
-        }
-        Console.WriteLine("  saved: " + filepath);
-    }
-
-    // ── InjectSyntheticPointerInput によるペンタップ（down/update/up） ──
-    static void SynTap(IntPtr pen, int absX, int absY, uint pressure) {
-        POINTER_TYPE_INFO t = new POINTER_TYPE_INFO();
-        t.type = PT_PEN;
-        t.penInfo.pointerInfo.pointerType = PT_PEN;
-        t.penInfo.pointerInfo.pointerId = 1;
-        t.penInfo.pointerInfo.frameId = ++frameId;
-        t.penInfo.pointerInfo.pointerFlags = POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT | POINTER_FLAG_PRIMARY;
-        t.penInfo.pointerInfo.ptPixelLocation.X = absX;
-        t.penInfo.pointerInfo.ptPixelLocation.Y = absY;
-        t.penInfo.pointerInfo.historyCount = 1;
-        t.penInfo.penMask = PEN_MASK_PRESSURE;
-        t.penInfo.pressure = pressure;
-        if (!Inject(pen, ref t, "DOWN")) return;
-        Thread.Sleep(40);
-        t.penInfo.pointerInfo.frameId = ++frameId;
-        t.penInfo.pointerInfo.pointerFlags = POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT;
-        if (!Inject(pen, ref t, "UPDATE")) return;
-        Thread.Sleep(30);
-        t.penInfo.pointerInfo.frameId = ++frameId;
-        t.penInfo.pointerInfo.pointerFlags = POINTER_FLAG_UP | POINTER_FLAG_INRANGE;
-        t.penInfo.pressure = 0;
-        Inject(pen, ref t, "UP");
-        Thread.Sleep(60);
-    }
-
-    static bool Inject(IntPtr pen, ref POINTER_TYPE_INFO t, string stage) {
-        if (InjectSyntheticPointerInput(pen, ref t, 1)) return true;
-        Console.WriteLine("ERR: inject at " + stage + " err=" + Marshal.GetLastWin32Error());
-        return false;
-    }
-
-    // ── VMulti HID報告（比較試験用） ──
-    static HidStream OpenVmulti() {
-        foreach (var dev in DeviceList.Local.GetHidDevices(255, 47820)) {
-            if (dev.GetMaxInputReportLength() == 65 && dev.GetMaxOutputReportLength() == 65) {
-                HidStream s;
-                if (dev.TryOpen(out s)) return s;
-            }
-        }
-        throw new Exception("VMulti device (65/65) not found");
-    }
-
-    static void VTap(HidStream s, int vx, int vy) {
-        ushort px = (ushort)((float)vx / _vd.Width * 32767f);
-        ushort py = (ushort)((float)vy / _vd.Height * 32767f);
-        VSend(s, px, py, 4096, 0x01);
-        Thread.Sleep(60);
-        VSend(s, px, py, 0, 0x00);
-        Thread.Sleep(80);
-    }
-
-    static void VSend(HidStream s, ushort x, ushort y, ushort pressure, byte buttons) {
-        byte[] b = new byte[10];
-        b[0] = 0x40; b[1] = 0x09; b[2] = 0x09; b[3] = buttons;
-        b[4] = (byte)(x & 0xFF); b[5] = (byte)(x >> 8);
-        b[6] = (byte)(y & 0xFF); b[7] = (byte)(y >> 8);
-        b[8] = (byte)(pressure & 0xFF); b[9] = (byte)(pressure >> 8);
-        s.Write(b);
+    static double GetNum(string obj, string key) {
+        int i = obj.IndexOf("\"" + key + "\"");
+        if (i < 0) throw new Exception("key not found: " + key);
+        int c = obj.IndexOf(':', i) + 1;
+        while (c < obj.Length && (obj[c] == ' ' || obj[c] == '\t' || obj[c] == '\r' || obj[c] == '\n')) c++;
+        int e = c;
+        while (e < obj.Length && (char.IsDigit(obj[e]) || obj[e] == '-' || obj[e] == '.' || obj[e] == 'e' || obj[e] == 'E' || obj[e] == '+')) e++;
+        return double.Parse(obj.Substring(c, e - c), System.Globalization.CultureInfo.InvariantCulture);
     }
 }
